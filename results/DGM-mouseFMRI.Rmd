@@ -1,0 +1,254 @@
+---
+title: "DGM-mouseFMRI"
+author: "Simon Schwab"
+date: "31 May 2018"
+output: html_notebook
+---
+
+## Install required packages
+```{r}
+# install.packages("rmarkdown")
+# install.packages("DGM")
+# install.packages("cowplot")
+# install.packages("ppcor")
+# install.packages("abind")
+# install.packages("testit")
+```
+
+## Libraries
+```{r message=FALSE}
+library(ggplot2)
+library(DGM)
+library(reshape2)
+library(cowplot)
+library(ppcor)
+library(abind)
+library(testit)
+library(data.table)
+```
+
+## Variables
+```{r}
+INFO = 'mouseFMRI'
+Nn=18
+N=34
+Nt=900
+TR=1
+PATH_HOME = '/home/simon'
+PATH_PROJ = file.path(PATH_HOME, 'Data', 'DGM-mouseFMRI') # Project path
+PATH_RESULTS = file.path(PATH_PROJ, 'results')
+PATH_FIGS = file.path(PATH_PROJ, 'figures')
+
+PATH_NET = file.path(PATH_HOME, 'Drive', 'DGM_mouseFMRI')
+PATH_TS = file.path(PATH_HOME, 'Drive', 'mouseFMRI')
+
+br = Nn - 0.5 # break for figures
+```
+
+## Load mouse info
+```{r}
+tmp = read.table(file = file.path(PATH_RESULTS, 'info.txt'), colClasses = "character")
+mydata = data.frame(file=tmp$V1, id=tmp$V2, virus=tmp$V3, active=tmp$V4)
+print(mydata)
+
+rois = read.table(file = file.path(PATH_RESULTS, 'labels.txt'), colClasses = "character")
+mylabels = rois$V3
+
+is.ctrl = mydata$virus=='Control'
+is.active = mydata$active=='2'
+
+#         baseline active
+# DREAD     n=10   n=10
+# Ctrl      n=7    n=7
+```
+
+## Load time series data
+```{r}
+f = list.files(PATH_TS, pattern = '*.txt')
+# read data
+ts = array(NA, dim=c(Nt, Nn, N))
+for (s in 1:N) {
+  d = as.matrix(read.table(file.path(PATH_TS, f[s]), header = F))
+  ts[,,s] = scaleTs(d[1:Nt,1:Nn]) # in case some subjects have more volumes
+}
+```
+
+## Plot example time series
+```{r, fig.height=3, fig.width=10}
+set.seed(1980)
+s = sample(N, 4)
+n = sample(Nn, 3)
+idx=1:100
+
+p = list()
+c = 1
+for (i in s) {
+  d = ts[,n,i]
+  colnames(d)=mylabels[n]
+  d_ = melt(d[idx,])
+  d_$Var2=as.factor(d_$Var2)
+  p[[c]] = ggplot(d_, aes(x = Var1, y = value, group=Var2, color=Var2)) + 
+    geom_line() + theme_minimal() + ggtitle(f[i])
+  c = c + 1
+}
+
+plot_grid(plotlist = p, ncol = 2, nrow = 2, rel_widths = c(1, 1))
+```
+
+## Run DGM on HCP cluster
+
+## Load DGM networks
+```{r eval=FALSE, include=FALSE}
+
+subj=list()
+for (s in 1:N) {
+  print(sprintf("Loading mouse dataset %s", mydata$file[s]))
+  subj[[s]] = read.subject(path=PATH_NET, id=sprintf("%s_%s", substr(mydata$file[s],18,22), INFO), Nn, modelStore = F)
+}
+
+dgm.contrl.base = dgm.group(subj[is.ctrl &  !is.active])
+dgm.contrl.actv = dgm.group(subj[is.ctrl &  is.active])
+dgm.dreadd.base = dgm.group(subj[!is.ctrl & !is.active])
+dgm.dreadd.actv = dgm.group(subj[!is.ctrl & is.active])
+
+save(dgm.contrl.base, dgm.contrl.actv, dgm.dreadd.base, dgm.dreadd.actv, file = file.path(PATH_RESULTS, sprintf('DGM-%s.RData', INFO)), compress = T)
+```
+### Load from RData
+```{r}
+load(file.path(PATH_RESULTS, sprintf('DGM-%s.RData', INFO)))
+```
+
+## Discount factors
+```{r fig.height=4, fig.width=7}
+set.seed(1980) # because jitter will always create a slightly different image
+
+lim = c(0.95, 1)
+p1 = ggplot(melt(dgm.contrl.base$df_), aes(x=as.factor(Var2), y=value)) +
+  geom_point(shape=1, color="gray50", size=1, position = position_jitter(width = NULL, height = 0)) +
+  geom_boxplot(width=0.6) + theme(axis.text = element_text(size=8)) +
+  ggtitle(sprintf("controls baseline", N)) + ylab("df") + xlab("node") + ylim(lim)
+
+p2 = ggplot(melt(dgm.contrl.actv$df_), aes(x=as.factor(Var2), y=value)) +
+  geom_point(shape=1, color="gray50", size=1, position = position_jitter(width = NULL, height = 0)) +
+  geom_boxplot(width=0.6) + theme(axis.text = element_text(size=8)) +
+  ggtitle(sprintf("controls active", N)) + ylab("df") + xlab("node") + ylim(lim)
+
+p3 = ggplot(melt(dgm.dreadd.base$df_), aes(x=as.factor(Var2), y=value)) +
+  geom_point(shape=1, color="gray50", size=1, position = position_jitter(width = NULL, height = 0)) +
+  geom_boxplot(width=0.6) + theme(axis.text = element_text(size=8)) +
+  ggtitle(sprintf("DREADD baseline", N)) + ylab("df") + xlab("node") + ylim(lim)
+
+p4 = ggplot(melt(dgm.dreadd.actv$df_), aes(x=as.factor(Var2), y=value)) +
+  geom_point(shape=1, color="gray50", size=1, position = position_jitter(width = NULL, height = 0)) +
+  geom_boxplot(width=0.6) + theme(axis.text = element_text(size=8)) +
+  ggtitle(sprintf("DREADD active", N)) + ylab("df") + xlab("node") + ylim(lim)
+
+plot_grid(p1, p2, p3, p4, ncol = 2, nrow = 2)
+```
+### DF Summary stats
+```{r, fig.height=5.2, fig.width=6.5}
+x=rbind(summary(c(dgm.contrl.base$df_)),
+        summary(c(dgm.contrl.actv$df_)),
+        summary(c(dgm.dreadd.base$df_)),
+        summary(c(dgm.dreadd.actv$df_)))
+rownames(x)=c("controls baseline", "controls active", "DREADD baseline", "DREADD active")
+print(x)
+```
+
+### Proportion of time-varying fits vs. stationary networks (df = 1)
+```{r}
+x = array(NA, dim = c(1,4))
+x[1,] = c(sum(dgm.contrl.base$df_ < 1) / (sum(is.ctrl & !is.active)*Nn),
+          sum(dgm.contrl.actv$df_ < 1) / (sum(is.ctrl & is.active)*Nn),
+          sum(dgm.dreadd.base$df_ < 1) / (sum(!is.ctrl & is.active)*Nn),
+          sum(dgm.dreadd.actv$df_ < 1) / (sum(!is.ctrl & !is.active)*Nn))
+colnames(x) = c("C base", "C active", "D base", "D active")
+print(x)
+```
+
+## Stats
+```{r}
+stats.contrl.base = binom.nettest(dgm.contrl.base$am, alter = "greater", fdr = 0.05)
+stats.contrl.actv = binom.nettest(dgm.contrl.actv$am, alter = "greater", fdr = 0.05)
+
+stats.dreadd.base = binom.nettest(dgm.dreadd.base$am, alter = "greater", fdr = 0.05)
+stats.dreadd.actv = binom.nettest(dgm.dreadd.actv$am, alter = "greater", fdr = 0.05)
+
+stats.prop.contrl = prop.nettest(x1 = apply(dgm.contrl.actv$am, c(1,2), sum),
+                                 n1 = sum(is.ctrl & is.active),
+                                 x2 = apply(dgm.contrl.base$am, c(1,2), sum),
+                                 n2 = sum(is.ctrl & !is.active),
+                                 fdr = 0.05, alpha = 0.05)
+
+stats.prop.dreadd = prop.nettest(x1 = apply(dgm.dreadd.actv$am, c(1,2), sum),
+                                 n1 = sum(!is.ctrl & is.active),
+                                 x2 = apply(dgm.dreadd.base$am, c(1,2), sum),
+                                 n2 = sum(!is.ctrl & !is.active),
+                                 fdr = 0.05, alpha = 0.05)
+
+stats.prop.base = prop.nettest(x1 = apply(dgm.dreadd.base$am, c(1,2), sum),
+                               n1 = sum(!is.ctrl & !is.active),
+                               x2 = apply(dgm.contrl.base$am, c(1,2), sum),
+                               n2 = sum(is.ctrl & !is.active),
+                               fdr = 0.05, alpha = 0.05)
+
+stats.prop.actv = prop.nettest(x1 = apply(dgm.dreadd.actv$am, c(1,2), sum),
+                               n1 = sum(!is.ctrl & is.active),
+                               x2 = apply(dgm.contrl.actv$am, c(1,2), sum),
+                               n2 = sum(is.ctrl & is.active),
+                               fdr = 0.05, alpha = 0.05)
+```
+
+## Plot network structures
+### Determine limits
+```{r}
+x = c(stats.contrl.actv$adj - stats.contrl.base$adj,
+      stats.dreadd.actv$adj - stats.dreadd.base$adj, 
+      stats.contrl.base$adj - stats.dreadd.base$adj,
+      stats.contrl.actv$adj - stats.dreadd.actv$adj)
+mylim=max(abs(x))
+mylim=c(-mylim, mylim)
+```
+
+
+## Plot Network
+```{r fig.height=9, fig.width=10, message=FALSE}
+p1 = gplotMat(stats.contrl.base$adj, title = "controls (baseline)", barWidth = 0.3,
+              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, colMapLabel = "%") +
+  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
+
+p2 = gplotMat(stats.contrl.actv$adj, title = "controls (active)", barWidth = 0.3,
+              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, colMapLabel = "%") +
+  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
+
+p3 = gplotMat((stats.contrl.actv$adj - stats.contrl.base$adj) * !is.na(stats.prop.contrl$z_uncorr), title = "active-baseline",
+              barWidth = 0.3, colMapLabel = "%",
+              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, lim = mylim, gradient = c("blue", "white", "red")) +
+  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
+
+p4 = gplotMat(stats.dreadd.base$adj, title = "DREADD (baseline)", barWidth = 0.3,
+              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, colMapLabel = "%") +
+  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
+
+p5 = gplotMat(stats.dreadd.actv$adj, title = "DREADD (active)", barWidth = 0.3,
+              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, colMapLabel = "%") +
+  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
+
+p6 = gplotMat((stats.dreadd.actv$adj - stats.dreadd.base$adj) * !is.na(stats.prop.dreadd$z_uncorr), title = "active-baseline",
+              barWidth = 0.3, colMapLabel = "%",
+              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, lim = mylim, gradient = c("blue", "white", "red")) +
+  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
+
+p7 = gplotMat((stats.dreadd.base$adj - stats.contrl.base$adj) * !is.na(stats.prop.base$z_uncorr), title = "dreadd-control",
+              barWidth = 0.3, colMapLabel = "%",
+              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, lim = mylim, gradient = c("blue", "white", "red")) +
+  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
+
+p8 = gplotMat((stats.dreadd.actv$adj - stats.contrl.actv$adj) * !is.na(stats.prop.actv$z_uncorr), title = "dreadd-control",
+              barWidth = 0.3, colMapLabel = "%",
+              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, lim = mylim, gradient = c("blue", "white", "red")) +
+  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
+
+plot_grid(p1, p2, p3, p4, p5, p6, p7, p8, ncol = 3, nrow = 3, rel_widths = c(1, 1))
+ggsave(path = PATH_FIGS, sprintf('DGM_%s-Proportions.png', INFO))
+```
