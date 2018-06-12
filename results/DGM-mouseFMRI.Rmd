@@ -1,7 +1,7 @@
 ---
 title: "DGM-mouseFMRI"
 author: "Simon Schwab"
-date: "31 May 2018"
+date: "12 June 2018"
 output: html_notebook
 ---
 
@@ -56,6 +56,8 @@ mylabels = rois$V3
 
 is.ctrl = mydata$virus=='Control'
 is.active = mydata$active=='2'
+N.contrl = 7
+N.dreadd = 10
 
 #         baseline active
 # DREAD     n=10   n=10
@@ -106,12 +108,13 @@ for (s in 1:N) {
   subj[[s]] = read.subject(path=PATH_NET, id=sprintf("%s_%s", substr(mydata$file[s],18,22), INFO), Nn, modelStore = F)
 }
 
+dgm.all = dgm.group(subj)
 dgm.contrl.base = dgm.group(subj[is.ctrl &  !is.active])
 dgm.contrl.actv = dgm.group(subj[is.ctrl &  is.active])
 dgm.dreadd.base = dgm.group(subj[!is.ctrl & !is.active])
 dgm.dreadd.actv = dgm.group(subj[!is.ctrl & is.active])
 
-save(dgm.contrl.base, dgm.contrl.actv, dgm.dreadd.base, dgm.dreadd.actv, file = file.path(PATH_RESULTS, sprintf('DGM-%s.RData', INFO)), compress = T)
+save(dgm.all, dgm.contrl.base, dgm.contrl.actv, dgm.dreadd.base, dgm.dreadd.actv, file = file.path(PATH_RESULTS, sprintf('DGM-%s.RData', INFO)), compress = T)
 ```
 ### Load from RData
 ```{r}
@@ -199,6 +202,16 @@ stats.prop.actv = prop.nettest(x1 = apply(dgm.dreadd.actv$am, c(1,2), sum),
                                fdr = 0.05, alpha = 0.05)
 ```
 
+## Calculate delta active - control
+```{r}
+delta.ctrl = array(NA, dim=c(Nn, Nn, N.contrl))
+for (i in 1:N.contrl) {
+  delta.ctrl[,,i] = dgm.contrl.actv$am[,,i] - dgm.contrl.base$am[,,i]
+}
+
+# stats.delta.ctrl = binom.nettest(delta.ctrl, fdr = .05)
+```
+
 ## Plot network structures
 ### Determine limits
 ```{r}
@@ -210,9 +223,26 @@ mylim=max(abs(x))
 mylim=c(-mylim, mylim)
 ```
 
+##  Modeling a binomial outcome with one or more explanatory variables
+For example motor, thalamus [2,17]
+```{r}
+logReg.P = array(NA, dim=c(Nn, Nn))
+logReg.zval = array(NA, dim=c(Nn, Nn))
+
+for (i in 1:Nn) {
+  for (j in 1:Nn) {
+    a = as.logical(dgm.all$am[i,j,])
+    tmp = summary(glm(formula = a ~ is.active * !is.ctrl, family = binomial))
+    logReg.P[i,j] = tmp$coefficients[4,4]
+    logReg.zval[i,j] = tmp$coefficients[4,3]
+  }
+}
+
+# p.adjust(logReg.P[!diag(Nn)], method = "fdr")
+```
 
 ## Plot Network
-```{r fig.height=9, fig.width=10, message=FALSE}
+```{r fig.height=6, fig.width=10, message=FALSE}
 p1 = gplotMat(stats.contrl.base$adj, title = "controls (baseline)", barWidth = 0.3,
               nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, colMapLabel = "%") +
   scale_x_continuous(breaks = 0.5:br, labels = mylabels)
@@ -221,9 +251,8 @@ p2 = gplotMat(stats.contrl.actv$adj, title = "controls (active)", barWidth = 0.3
               nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, colMapLabel = "%") +
   scale_x_continuous(breaks = 0.5:br, labels = mylabels)
 
-p3 = gplotMat((stats.contrl.actv$adj - stats.contrl.base$adj) * !is.na(stats.prop.contrl$z_uncorr), title = "active-baseline",
-              barWidth = 0.3, colMapLabel = "%",
-              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, lim = mylim, gradient = c("blue", "white", "red")) +
+p3 = gplotMat(logReg.zval*(logReg.P < 0.05), title = "DREADD*active (p < .05, uc.)", barWidth = 0.3, lim = c(-3,3), gradient = c("blue", "white", "red"),
+              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, colMapLabel = "z") +
   scale_x_continuous(breaks = 0.5:br, labels = mylabels)
 
 p4 = gplotMat(stats.dreadd.base$adj, title = "DREADD (baseline)", barWidth = 0.3,
@@ -234,21 +263,9 @@ p5 = gplotMat(stats.dreadd.actv$adj, title = "DREADD (active)", barWidth = 0.3,
               nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, colMapLabel = "%") +
   scale_x_continuous(breaks = 0.5:br, labels = mylabels)
 
-p6 = gplotMat((stats.dreadd.actv$adj - stats.dreadd.base$adj) * !is.na(stats.prop.dreadd$z_uncorr), title = "active-baseline",
-              barWidth = 0.3, colMapLabel = "%",
-              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, lim = mylim, gradient = c("blue", "white", "red")) +
-  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
-
-p7 = gplotMat((stats.dreadd.base$adj - stats.contrl.base$adj) * !is.na(stats.prop.base$z_uncorr), title = "dreadd-control",
-              barWidth = 0.3, colMapLabel = "%",
-              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, lim = mylim, gradient = c("blue", "white", "red")) +
-  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
-
-p8 = gplotMat((stats.dreadd.actv$adj - stats.contrl.actv$adj) * !is.na(stats.prop.actv$z_uncorr), title = "dreadd-control",
-              barWidth = 0.3, colMapLabel = "%",
-              nodeLabels = mylabels, xAngle = 90, axisTextSize = 7, lim = mylim, gradient = c("blue", "white", "red")) +
-  scale_x_continuous(breaks = 0.5:br, labels = mylabels)
-
-plot_grid(p1, p2, p3, p4, p5, p6, p7, p8, ncol = 3, nrow = 3, rel_widths = c(1, 1))
+plot_grid(p1, p2, p3, p4, p5, ncol = 3, nrow = 2, rel_widths = c(1, 1))
 ggsave(path = PATH_FIGS, sprintf('DGM_%s-Proportions.png', INFO))
 ```
+
+
+
